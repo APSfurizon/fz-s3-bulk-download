@@ -30,29 +30,26 @@ ZIP_FILENAME_PREPEND = os.environ.get("ZIP_FILENAME_PREPEND", "gallery_")
 logger = logging.getLogger("uvicorn.error")
 
 def generate_zip_stream(files: list, userId: int):
-    try:
-        def member_files():
-            for file in files:
+    def member_files():
+        for file in files:
 
-                response = s3_client.get_object(Bucket=S3_BUCKET, Key=file["k"])
-                s3_stream = response['Body']
-                
-                def file_chunks():
-                    for chunk in s3_stream.iter_chunks(chunk_size=65536):
-                        yield chunk
-                
-                yield (
-                    f'{file["ne"]}/{file["np"]}/{file["nf"]}',  # Filename
-                    datetime.fromisoformat(file["t"]),          # Timestamp for the file inside the zip
-                    0o600,                                      # File permissions inside the zip
-                    ZIP_64,                                     # Zip format
-                    file_chunks()                               # The streaming data from S3
-                )
+            response = s3_client.get_object(Bucket=S3_BUCKET, Key=file["k"])
+            s3_stream = response['Body']
+            
+            def file_chunks():
+                for chunk in s3_stream.iter_chunks(chunk_size=65536):
+                    yield chunk
+            
+            yield (
+                f'{file["ne"]}/{file["np"]}/{file["nf"]}',  # Filename
+                datetime.fromisoformat(file["t"]),          # Timestamp for the file inside the zip
+                0o600,                                      # File permissions inside the zip
+                ZIP_64,                                     # Zip format
+                file_chunks()                               # The streaming data from S3
+            )
 
-        for zipped_chunk in stream_zip(member_files()):
-            yield zipped_chunk
-    finally:
-        unlockUserId(userId)
+    for zipped_chunk in stream_zip(member_files()):
+        yield zipped_chunk
     
 mutex = Lock()
 users = {}
@@ -67,15 +64,23 @@ def lockUserId(userId: int) -> bool:
         cleanLockedUsers()
         if userId in users:
             return False
-        logger.debug(f"Locking user {userId}")
+        logger.info(f"Locking user {userId}")
         users[userId] = time.time()
         return True
 def unlockUserId(userId: int):
     with mutex:
         cleanLockedUsers()
         if userId in users:
-            logger.debug(f"Unlocking user {userId} after {time.time() - users[userId]} seconds")
+            logger.info(f"Unlocking user {userId} after {time.time() - users[userId]} seconds")
             del users[userId]
+            
+@app.middleware("http")
+async def middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    finally:
+        if "userId" in request.state and request.state.userId is not None:
+            unlockUserId(request.state.userId)
 
 @app.post("/d")
 async def bulkDownload(request: Request, mac: str):
@@ -93,6 +98,7 @@ async def bulkDownload(request: Request, mac: str):
         return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Request expired"})
     
     userId = data["userId"]
+    request.state.userId = userId
     if not lockUserId(userId):
         logger.warning(f"User {userId} is already locked")
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"error": "User is already downloading files"})

@@ -88,7 +88,7 @@ async def bulkDownload(request: Request, mac: str):
         return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Invalid HMAC"})
     
     data = json.loads(data)
-    if int(time.time() * 1000) > data["expiryMs"]:
+    if int(time.time() * 1000) > data["expireMs"]:
         logger.warning(f"Request already expired")
         return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Request expired"})
     

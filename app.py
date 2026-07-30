@@ -9,9 +9,10 @@ import logging
 from datetime import datetime
 from multiprocessing import Lock
 from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from stream_zip import stream_zip, ZIP_64
-
+    
 app = FastAPI()
 
 s3_client = boto3.client(
@@ -26,6 +27,7 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "test")
 HMAC_KEY = os.environ["HMAC_KEY"].encode()
 EXPIRE_CLEANUP_SECS = int(os.environ.get("EXPIRE_CLEANUP_SECS", 9000))
 ZIP_FILENAME_PREPEND = os.environ.get("ZIP_FILENAME_PREPEND", "gallery_")
+CORS_ORIGINS = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -109,6 +111,15 @@ async def bulkDownload(request: Request, mac: str):
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={ZIP_FILENAME_PREPEND}{int(time.time())}.zip"}
     )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["POST"],
+    allow_headers=["*"],
+    expose_headers=["Content-Disposition"],  # so browser JS can read the zip filename
+)
 
 if __name__ == "__main__":
     import uvicorn
